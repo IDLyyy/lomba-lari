@@ -6,24 +6,39 @@ import jsQR from 'jsqr';
 interface QrScannerProps {
   onScan: (data: string) => void;
   paused: boolean;
-  /** Pre-warmed stream from parent — skips getUserMedia cold start */
   stream?: MediaStream | null;
 }
+
+// Decode at this resolution — 640×480 is more than enough for QR codes and
+// is ~9x fewer pixels than 1920×1080, making each decode ~9x faster.
+const DECODE_W = 640;
+const DECODE_H = 480;
+
+// Decode at most this many times per second — 20fps is plenty for a scanner,
+// and keeps the main thread free for React renders and animations.
+const MAX_FPS = 20;
+const FRAME_MS = 1000 / MAX_FPS;
 
 export function QrScanner({ onScan, paused, stream: externalStream }: QrScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
+  const lastFrameRef = useRef<number>(0);
   const pausedRef = useRef(paused);
   const lastTextRef = useRef('');
   const lastTimeRef = useRef(0);
   const ownStreamRef = useRef<MediaStream | null>(null);
 
-  useEffect(() => {
-    pausedRef.current = paused;
-  }, [paused]);
+  useEffect(() => { pausedRef.current = paused; }, [paused]);
 
-  const tick = useCallback(() => {
+  const tick = useCallback((now: number) => {
+    // Throttle — skip frames that arrive faster than FRAME_MS
+    if (now - lastFrameRef.current < FRAME_MS) {
+      rafRef.current = requestAnimationFrame(tick);
+      return;
+    }
+    lastFrameRef.current = now;
+
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || video.readyState < video.HAVE_ENOUGH_DATA) {
@@ -34,23 +49,18 @@ export function QrScanner({ onScan, paused, stream: externalStream }: QrScannerP
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) { rafRef.current = requestAnimationFrame(tick); return; }
 
-    const w = video.videoWidth;
-    const h = video.videoHeight;
-    if (w === 0 || h === 0) { rafRef.current = requestAnimationFrame(tick); return; }
-    if (canvas.width !== w) canvas.width = w;
-    if (canvas.height !== h) canvas.height = h;
-
-    ctx.drawImage(video, 0, 0, w, h);
-    const imageData = ctx.getImageData(0, 0, w, h);
-
-    const result = jsQR(imageData.data, w, h, { inversionAttempts: 'dontInvert' });
+    // Draw at reduced resolution — much faster getImageData + jsQR decode
+    ctx.drawImage(video, 0, 0, DECODE_W, DECODE_H);
+    const imageData = ctx.getImageData(0, 0, DECODE_W, DECODE_H);
+    const result = jsQR(imageData.data, DECODE_W, DECODE_H, { inversionAttempts: 'dontInvert' });
 
     if (result && !pausedRef.current) {
       const text = result.data;
-      const now = Date.now();
-      if (text !== lastTextRef.current || now - lastTimeRef.current > 600) {
+      const ts = Date.now();
+      // 600ms debounce — prevents same QR firing twice in a row
+      if (text !== lastTextRef.current || ts - lastTimeRef.current > 600) {
         lastTextRef.current = text;
-        lastTimeRef.current = now;
+        lastTimeRef.current = ts;
         onScan(text);
       }
     }
@@ -59,17 +69,20 @@ export function QrScanner({ onScan, paused, stream: externalStream }: QrScannerP
   }, [onScan]);
 
   useEffect(() => {
+    // Fix canvas size once — it never needs to match video resolution
+    const canvas = canvasRef.current;
+    if (canvas) { canvas.width = DECODE_W; canvas.height = DECODE_H; }
+
     let cancelled = false;
 
     async function start() {
       try {
-        // Use pre-warmed stream if provided — no cold start delay
         const stream = externalStream ?? await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: 'environment' },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            frameRate: { ideal: 60 },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30 },   // 30fps is enough — decoder runs at 20fps
           },
           audio: false,
         });
@@ -96,7 +109,6 @@ export function QrScanner({ onScan, paused, stream: externalStream }: QrScannerP
     return () => {
       cancelled = true;
       cancelAnimationFrame(rafRef.current);
-      // Only stop the stream if we own it (not external)
       ownStreamRef.current?.getTracks().forEach(t => t.stop());
       ownStreamRef.current = null;
     };
@@ -110,7 +122,8 @@ export function QrScanner({ onScan, paused, stream: externalStream }: QrScannerP
         playsInline
         muted
       />
-      <canvas ref={canvasRef} className="hidden" />
+      {/* Fixed-size decode canvas — never shown */}
+      <canvas ref={canvasRef} className="hidden" width={DECODE_W} height={DECODE_H} />
 
       {/* Overlay */}
       <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
