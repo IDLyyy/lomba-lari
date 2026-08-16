@@ -20,16 +20,19 @@ export default function ScannerPage() {
   const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
   const [deviceName, setDeviceName] = useState('');
   const [session, setSession] = useState<ScannerSession | null>(null);
-
-  // Optimistic feedback state
   const [feedback, setFeedback] = useState<FeedbackState>({ phase: 'idle' });
   const [lastScan, setLastScan] = useState<{ bib: string; name: string; cp: string; time: string } | null>(null);
-
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState('');
+
+  // Ref so handleScan always reads current phase without stale closure
+  const feedbackPhaseRef = useRef<FeedbackState['phase']>('idle');
+  useEffect(() => { feedbackPhaseRef.current = feedback.phase; }, [feedback.phase]);
+
   const warmStreamRef = useRef<MediaStream | null>(null);
   const { isOnline, pendingCount, addToQueue } = useOfflineQueue();
 
+  // Load checkpoints + restore saved session
   useEffect(() => {
     fetch('/api/checkpoints').then(r => r.json()).then(setCheckpoints).catch(() => {});
     const saved = localStorage.getItem('scanner_session');
@@ -44,7 +47,7 @@ export default function ScannerPage() {
     }
   }, []);
 
-  // Pre-warm camera when checkpoint is selected
+  // Pre-warm camera as soon as checkpoint is selected
   useEffect(() => {
     if (!selectedCheckpoint || state !== 'setup') return;
     setCameraReady(false);
@@ -66,6 +69,7 @@ export default function ScannerPage() {
     return () => { cancelled = true; };
   }, [selectedCheckpoint, state]);
 
+  // Cleanup on unmount
   useEffect(() => () => { warmStreamRef.current?.getTracks().forEach(t => t.stop()); }, []);
 
   const startScanner = async () => {
@@ -84,33 +88,27 @@ export default function ScannerPage() {
   };
 
   const handleScan = useCallback(async (qrToken: string) => {
-    if (!session || feedback.phase !== 'idle') return;
+    if (!session || feedbackPhaseRef.current !== 'idle') return;
 
-    // ── STEP 1: Show "Memverifikasi..." IMMEDIATELY ──
+    // Show pending IMMEDIATELY — < 1ms
     setFeedback({ phase: 'pending', qrText: qrToken });
 
-    // Offline — queue and show immediately
     if (!isOnline) {
       addToQueue({ qr_token: qrToken, checkpoint_id: session.checkpoint_id, scanner_session_id: session.id });
-      setFeedback({
-        phase: 'done',
-        result: { success: false, status: 'REJECTED', message: 'Offline — scan disimpan dan akan dikirim saat online kembali.' },
-      });
+      setFeedback({ phase: 'done', result: { success: false, status: 'REJECTED', message: 'Offline — scan disimpan.' } });
       return;
     }
 
-    // ── STEP 2: Send to server in background ──
     try {
+      // keepalive reuses TCP connection; text()+JSON.parse avoids extra async tick
       const res = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ qr_token: qrToken, checkpoint_id: session.checkpoint_id, scanner_session_id: session.id }),
+        keepalive: true,
       });
-      const result = await res.json();
-
-      // ── STEP 3: Update feedback with real result ──
+      const result = JSON.parse(await res.text());
       setFeedback({ phase: 'done', result });
-
       if (result.success) {
         setLastScan({
           bib: result.participant?.bib_number ?? '',
@@ -121,12 +119,9 @@ export default function ScannerPage() {
       }
     } catch {
       addToQueue({ qr_token: qrToken, checkpoint_id: session.checkpoint_id, scanner_session_id: session.id });
-      setFeedback({
-        phase: 'done',
-        result: { success: false, status: 'REJECTED', message: 'Koneksi bermasalah. Scan disimpan dan akan dikirim ulang.' },
-      });
+      setFeedback({ phase: 'done', result: { success: false, status: 'REJECTED', message: 'Koneksi bermasalah. Scan disimpan.' } });
     }
-  }, [session, feedback.phase, isOnline, addToQueue]);
+  }, [session, isOnline, addToQueue]);
 
   const handleReset = () => {
     warmStreamRef.current?.getTracks().forEach(t => t.stop());
