@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useCallback } from 'react';
-import { Html5Qrcode } from 'html5-qrcode';
+import { BrowserMultiFormatReader } from '@zxing/browser';
+import { DecodeHintType, BarcodeFormat, NotFoundException } from '@zxing/library';
 
 interface QrScannerProps {
   onScan: (data: string) => void;
@@ -9,85 +10,92 @@ interface QrScannerProps {
 }
 
 export function QrScanner({ onScan, paused }: QrScannerProps) {
-  const scannerRef = useRef<Html5Qrcode | null>(null);
-  const startedRef = useRef(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const readerRef = useRef<BrowserMultiFormatReader | null>(null);
+  const controlsRef = useRef<{ stop: () => void } | null>(null);
+  const pausedRef = useRef(paused);
   const lastScanRef = useRef<string>('');
   const lastScanTimeRef = useRef<number>(0);
-  const pausedRef = useRef(paused);
 
   useEffect(() => {
     pausedRef.current = paused;
   }, [paused]);
 
-  const handleScan = useCallback((decodedText: string) => {
+  const handleDecode = useCallback((text: string) => {
     if (pausedRef.current) return;
     const now = Date.now();
-    // 1.2s debounce — fast enough for rapid scanning, prevents double-fire
-    if (decodedText === lastScanRef.current && now - lastScanTimeRef.current < 1200) return;
-    lastScanRef.current = decodedText;
+    // 800ms debounce — just enough to prevent double-fire, still very fast
+    if (text === lastScanRef.current && now - lastScanTimeRef.current < 800) return;
+    lastScanRef.current = text;
     lastScanTimeRef.current = now;
-    onScan(decodedText);
+    onScan(text);
   }, [onScan]);
 
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
+    if (!videoRef.current) return;
 
-    const scanner = new Html5Qrcode('qr-reader');
-    scannerRef.current = scanner;
+    // Hints: only decode QR codes (skip barcodes etc.) — faster
+    const hints = new Map();
+    hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]);
+    hints.set(DecodeHintType.TRY_HARDER, true);
 
-    scanner.start(
-      { facingMode: 'environment' },
+    const reader = new BrowserMultiFormatReader(hints);
+    readerRef.current = reader;
+
+    // decodeFromConstraints streams directly from getUserMedia — no wrapper overhead
+    reader.decodeFromConstraints(
       {
-        fps: 30,              // 30fps — much faster decode cycle
-        qrbox: { width: 280, height: 280 },
-        aspectRatio: 1.0,     // square video feed, not rectangular
-        disableFlip: false,
+        video: {
+          facingMode: 'environment',
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 60, min: 30 },
+        },
       },
-      handleScan,
-      () => {}
+      videoRef.current,
+      (result, err, controls) => {
+        // Store controls on first callback so we can stop later
+        if (controls && !controlsRef.current) {
+          controlsRef.current = controls;
+        }
+        if (result) {
+          handleDecode(result.getText());
+        }
+        // NotFoundException fires every frame when nothing found — ignore it
+        if (err && !(err instanceof NotFoundException)) {
+          console.error('Decode error:', err);
+        }
+      }
     ).catch((err) => {
       console.error('Camera start error:', err);
-      startedRef.current = false;
     });
 
     return () => {
-      scanner.stop().catch(() => {}).finally(() => scanner.clear());
-      startedRef.current = false;
+      controlsRef.current?.stop();
+      controlsRef.current = null;
+      readerRef.current = null;
     };
-  }, [handleScan]);
+  }, [handleDecode]);
 
   return (
-    <div className="relative w-full h-full">
-      {/* html5-qrcode renders into this div */}
-      <div id="qr-reader" className="w-full h-full" />
+    <div className="relative w-full h-full bg-black overflow-hidden">
+      {/* Raw video element — full screen, no wrapper overhead */}
+      <video
+        ref={videoRef}
+        className="absolute inset-0 w-full h-full object-cover"
+        autoPlay
+        playsInline
+        muted
+      />
 
-      {/* Hide html5-qrcode's own UI chrome (file button, torch, etc.) */}
-      <style>{`
-        #qr-reader__header_message,
-        #qr-reader__status_span,
-        #qr-reader__dashboard,
-        #qr-reader img,
-        #qr-reader button,
-        #qr-reader select { display: none !important; }
-        #qr-reader video {
-          width: 100% !important;
-          height: 100% !important;
-          object-fit: cover !important;
-          border-radius: 0 !important;
-        }
-        #qr-reader {
-          border: none !important;
-          padding: 0 !important;
-        }
-      `}</style>
-
-      {/* Scan frame overlay — the corners + finder box */}
+      {/* Overlay: vignette + scan frame */}
       <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-        {/* Dark vignette around the scan zone */}
-        <div className="absolute inset-0"
+        {/* Vignette */}
+        <div
+          className="absolute inset-0"
           style={{
-            background: 'radial-gradient(ellipse 65% 65% at 50% 50%, transparent 55%, rgba(0,0,0,0.55) 100%)'
+            background:
+              'radial-gradient(ellipse 60% 60% at 50% 50%, transparent 50%, rgba(0,0,0,0.6) 100%)',
           }}
         />
 
@@ -95,15 +103,18 @@ export function QrScanner({ onScan, paused }: QrScannerProps) {
         <div className="relative w-64 h-64">
           {/* Animated scan line */}
           <div
-            className="absolute left-2 right-2 h-0.5 bg-info/80"
-            style={{ animation: 'scanLine 2s ease-in-out infinite', top: '50%' }}
+            className="absolute left-3 right-3 h-0.5 rounded-full"
+            style={{
+              background: 'linear-gradient(90deg, transparent, #0A84FF, transparent)',
+              animation: 'scanLine 1.6s ease-in-out infinite',
+            }}
           />
 
           {/* Corner brackets */}
-          <div className="absolute top-0 left-0 w-10 h-10 border-t-3 border-l-3 border-info rounded-tl-lg" style={{ borderWidth: '3px 0 0 3px' }} />
-          <div className="absolute top-0 right-0 w-10 h-10 border-info rounded-tr-lg" style={{ borderWidth: '3px 3px 0 0' }} />
-          <div className="absolute bottom-0 left-0 w-10 h-10 border-info rounded-bl-lg" style={{ borderWidth: '0 0 3px 3px' }} />
-          <div className="absolute bottom-0 right-0 w-10 h-10 border-info rounded-br-lg" style={{ borderWidth: '0 3px 3px 0' }} />
+          <span className="absolute top-0 left-0 w-8 h-8 block" style={{ borderTop: '3px solid #0A84FF', borderLeft: '3px solid #0A84FF', borderRadius: '6px 0 0 0' }} />
+          <span className="absolute top-0 right-0 w-8 h-8 block" style={{ borderTop: '3px solid #0A84FF', borderRight: '3px solid #0A84FF', borderRadius: '0 6px 0 0' }} />
+          <span className="absolute bottom-0 left-0 w-8 h-8 block" style={{ borderBottom: '3px solid #0A84FF', borderLeft: '3px solid #0A84FF', borderRadius: '0 0 0 6px' }} />
+          <span className="absolute bottom-0 right-0 w-8 h-8 block" style={{ borderBottom: '3px solid #0A84FF', borderRight: '3px solid #0A84FF', borderRadius: '0 0 6px 0' }} />
         </div>
       </div>
 
