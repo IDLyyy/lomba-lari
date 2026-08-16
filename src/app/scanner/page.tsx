@@ -193,7 +193,7 @@ export default function ScannerPage() {
 
       {/* Scanner area */}
       <div className="flex-1 flex flex-col items-center justify-center p-4 gap-6">
-        <QrScanner onScan={handleScan} active={!scanResult} />
+        <QrScanner onScan={handleScan} paused={!!scanResult} />
 
         {/* Last successful scan */}
         {lastScan?.participant && (

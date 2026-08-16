@@ -65,8 +65,11 @@ export function useOfflineQueue() {
             scanner_session_id: item.scanner_session_id,
           }),
         });
-        if (!res.ok) remaining.push(item);
+        // 4xx = business rejection (DUPLICATE/REJECTED) — discard, don't retry
+        // 5xx or network error — keep in queue for retry
+        if (res.status >= 500) remaining.push(item);
       } catch {
+        // Network failure — keep for retry
         remaining.push(item);
       }
     }

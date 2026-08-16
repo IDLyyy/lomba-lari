@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect } from 'react';
-import { Check, AlertTriangle, Copy } from 'lucide-react';
+import { useEffect, useRef } from 'react';
+import { Check, AlertTriangle, Copy, WifiOff } from 'lucide-react';
 import type { ScanResult } from '@/types';
 
 interface ScanFeedbackProps {
@@ -10,52 +10,108 @@ interface ScanFeedbackProps {
 }
 
 export function ScanFeedback({ result, onDismiss }: ScanFeedbackProps) {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     if (!result) return;
-    const timer = setTimeout(onDismiss, result.success ? 2000 : 3000);
-    return () => clearTimeout(timer);
+
+    // Clear any existing timer
+    if (timerRef.current) clearTimeout(timerRef.current);
+
+    const delay = result.success ? 1800 : 2500;
+    timerRef.current = setTimeout(onDismiss, delay);
+
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
   }, [result, onDismiss]);
 
   if (!result) return null;
 
+  // ── SUCCESS ──────────────────────────────────────────────────
   if (result.success) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 animate-fade-in" onClick={onDismiss}>
-        <div className="flex flex-col items-center gap-4 animate-scale-in">
-          <div className="w-24 h-24 rounded-full bg-success/20 flex items-center justify-center" style={{ animation: 'pulse-success 1s ease-in-out' }}>
-            <Check size={48} className="text-success" />
+      <div
+        className="fixed inset-0 z-50 flex items-end justify-center pb-12 animate-fade-in"
+        style={{ background: 'rgba(0,0,0,0.75)' }}
+        onClick={onDismiss}
+      >
+        <div className="flex flex-col items-center gap-3 animate-scale-in px-8 text-center">
+          <div
+            className="w-20 h-20 rounded-full bg-success/20 flex items-center justify-center"
+            style={{ animation: 'pulse-success 0.8s ease-out' }}
+          >
+            <Check size={44} className="text-success" strokeWidth={3} />
           </div>
-          <div className="text-center">
-            <p className="text-[24px] font-bold text-text-primary">{result.participant?.bib_number}</p>
-            <p className="text-[17px] text-text-secondary">{result.participant?.name}</p>
-            <p className="text-[15px] text-success mt-2">{result.checkpoint?.name} berhasil tercatat</p>
-            {result.scanned_at && (
-              <p className="text-[13px] text-text-secondary mt-1">
-                {new Date(result.scanned_at).toLocaleTimeString('id-ID', { hour12: false })}
-              </p>
-            )}
-          </div>
+          <p className="text-[28px] font-bold text-white">{result.participant?.bib_number}</p>
+          <p className="text-[16px] text-white/80">{result.participant?.name}</p>
+          <p className="text-[14px] text-success font-medium">{result.checkpoint?.name} berhasil</p>
+          {result.scanned_at && (
+            <p className="text-[13px] text-white/50">
+              {new Date(result.scanned_at).toLocaleTimeString('id-ID', { hour12: false })}
+            </p>
+          )}
         </div>
       </div>
     );
   }
 
-  const icon = result.status === 'DUPLICATE' ? <Copy size={48} /> : <AlertTriangle size={48} />;
-  const color = result.status === 'DUPLICATE' ? 'text-warning' : 'text-error';
-  const bg = result.status === 'DUPLICATE' ? 'bg-warning/20' : 'bg-error/20';
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 animate-fade-in" onClick={onDismiss}>
-      <div className="flex flex-col items-center gap-4 animate-scale-in px-8">
-        <div className={`w-24 h-24 rounded-full ${bg} flex items-center justify-center`}>
-          <span className={color}>{icon}</span>
-        </div>
-        <div className="text-center">
+  // ── DUPLICATE ────────────────────────────────────────────────
+  if (result.status === 'DUPLICATE') {
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-end justify-center pb-12 animate-fade-in"
+        style={{ background: 'rgba(0,0,0,0.75)' }}
+        onClick={onDismiss}
+      >
+        <div className="flex flex-col items-center gap-3 animate-scale-in px-8 text-center">
+          <div className="w-20 h-20 rounded-full bg-warning/20 flex items-center justify-center">
+            <Copy size={40} className="text-warning" />
+          </div>
           {result.participant && (
-            <p className="text-[20px] font-bold text-text-primary">{result.participant.bib_number}</p>
+            <p className="text-[22px] font-bold text-white">{result.participant.bib_number}</p>
           )}
-          <p className={`text-[17px] ${color} mt-2 font-medium`}>{result.message}</p>
+          <p className="text-[15px] text-warning font-medium">Sudah tercatat</p>
+          <p className="text-[13px] text-white/60">{result.message}</p>
         </div>
+      </div>
+    );
+  }
+
+  // ── OFFLINE / NETWORK ────────────────────────────────────────
+  if (result.message?.includes('Offline') || result.message?.includes('Koneksi')) {
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-end justify-center pb-12 animate-fade-in"
+        style={{ background: 'rgba(0,0,0,0.75)' }}
+        onClick={onDismiss}
+      >
+        <div className="flex flex-col items-center gap-3 animate-scale-in px-8 text-center">
+          <div className="w-20 h-20 rounded-full bg-warning/20 flex items-center justify-center">
+            <WifiOff size={40} className="text-warning" />
+          </div>
+          <p className="text-[15px] text-warning font-medium">Offline</p>
+          <p className="text-[13px] text-white/60">{result.message}</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── REJECTED ─────────────────────────────────────────────────
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center pb-12 animate-fade-in"
+      style={{ background: 'rgba(0,0,0,0.75)' }}
+      onClick={onDismiss}
+    >
+      <div className="flex flex-col items-center gap-3 animate-scale-in px-8 text-center">
+        <div className="w-20 h-20 rounded-full bg-error/20 flex items-center justify-center">
+          <AlertTriangle size={40} className="text-error" />
+        </div>
+        {result.participant && (
+          <p className="text-[22px] font-bold text-white">{result.participant.bib_number}</p>
+        )}
+        <p className="text-[15px] text-error font-medium">{result.message}</p>
       </div>
     </div>
   );
