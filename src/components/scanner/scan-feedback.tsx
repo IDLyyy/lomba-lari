@@ -18,7 +18,10 @@ export function ScanFeedback({ result, onDismiss }: ScanFeedbackProps) {
     // Clear any existing timer
     if (timerRef.current) clearTimeout(timerRef.current);
 
-    const delay = result.success ? 1200 : 2000;
+    // Dipercepat: sukses 600ms (cukup buat lihat kedip hijau + bib number),
+    // gagal 1400ms (operator masih perlu waktu baca pesan error).
+    // Sebelumnya 1200ms / 2000ms — kamera ke-pause selama itu tiap scan.
+    const delay = result.success ? 600 : 1400;
     timerRef.current = setTimeout(onDismiss, delay);
 
     return () => {
