@@ -18,7 +18,7 @@ export function ScanFeedback({ result, onDismiss }: ScanFeedbackProps) {
     // Clear any existing timer
     if (timerRef.current) clearTimeout(timerRef.current);
 
-    const delay = result.success ? 1800 : 2500;
+    const delay = result.success ? 1200 : 2000;
     timerRef.current = setTimeout(onDismiss, delay);
 
     return () => {

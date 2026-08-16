@@ -60,18 +60,9 @@ export default function ScannerPage() {
   const handleScan = useCallback(async (qrToken: string) => {
     if (!session) return;
 
-    // Offline: queue and show offline feedback
     if (!isOnline) {
-      addToQueue({
-        qr_token: qrToken,
-        checkpoint_id: session.checkpoint_id,
-        scanner_session_id: session.id,
-      });
-      setScanResult({
-        success: false,
-        status: 'REJECTED',
-        message: 'Offline — scan disimpan dan akan dikirim saat online kembali.',
-      });
+      addToQueue({ qr_token: qrToken, checkpoint_id: session.checkpoint_id, scanner_session_id: session.id });
+      setScanResult({ success: false, status: 'REJECTED', message: 'Offline — scan disimpan dan akan dikirim saat online kembali.' });
       return;
     }
 
@@ -79,27 +70,14 @@ export default function ScannerPage() {
       const res = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          qr_token: qrToken,
-          checkpoint_id: session.checkpoint_id,
-          scanner_session_id: session.id,
-        }),
+        body: JSON.stringify({ qr_token: qrToken, checkpoint_id: session.checkpoint_id, scanner_session_id: session.id }),
       });
       const result: ScanResult = await res.json();
       setScanResult(result);
       if (result.success) setLastScan(result);
     } catch {
-      // Network error while nominally online — queue it
-      addToQueue({
-        qr_token: qrToken,
-        checkpoint_id: session.checkpoint_id,
-        scanner_session_id: session.id,
-      });
-      setScanResult({
-        success: false,
-        status: 'REJECTED',
-        message: 'Koneksi bermasalah. Scan disimpan dan akan dikirim ulang.',
-      });
+      addToQueue({ qr_token: qrToken, checkpoint_id: session.checkpoint_id, scanner_session_id: session.id });
+      setScanResult({ success: false, status: 'REJECTED', message: 'Koneksi bermasalah. Scan disimpan dan akan dikirim ulang.' });
     }
   }, [session, isOnline, addToQueue]);
 
@@ -111,6 +89,7 @@ export default function ScannerPage() {
 
   const currentCheckpoint = checkpoints.find(c => c.id === session?.checkpoint_id);
 
+  /* ── SETUP SCREEN ─────────────────────────────────────────── */
   if (state === 'setup') {
     return (
       <div className="min-h-dvh bg-background flex flex-col items-center justify-center p-6">
@@ -122,7 +101,6 @@ export default function ScannerPage() {
             <h1 className="text-[24px] font-bold text-text-primary">Set Scanner</h1>
             <p className="text-[14px] text-text-secondary mt-1">Pilih checkpoint untuk scanner ini</p>
           </div>
-
           <div className="space-y-4">
             <Select
               label="Checkpoint"
@@ -140,7 +118,6 @@ export default function ScannerPage() {
               onChange={e => setDeviceName(e.target.value)}
             />
           </div>
-
           <Button className="w-full" size="lg" onClick={startScanner} disabled={!selectedCheckpoint || !deviceName}>
             Start Scanner
           </Button>
@@ -149,74 +126,74 @@ export default function ScannerPage() {
     );
   }
 
+  /* ── SCANNING SCREEN ──────────────────────────────────────── */
   return (
-    <div className="min-h-dvh bg-background flex flex-col">
-      {/* Header */}
-      <header className="flex items-center justify-between px-4 py-3 glass">
+    <div className="fixed inset-0 bg-black flex flex-col overflow-hidden">
+
+      {/* Camera — fills entire screen */}
+      <div className="absolute inset-0">
+        <QrScanner onScan={handleScan} paused={!!scanResult} />
+      </div>
+
+      {/* Top bar — floats over camera */}
+      <div className="relative z-10 flex items-center justify-between px-4 pt-safe-top pb-3 pt-4"
+        style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, transparent 100%)' }}>
         <button
           onClick={handleReset}
           aria-label="Kembali ke setup"
-          className="text-text-secondary hover:text-text-primary transition-colors"
+          className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center text-white active:scale-95 transition-transform"
         >
-          <ChevronLeft size={24} />
+          <ChevronLeft size={20} />
         </button>
 
         <div className="text-center">
-          <p className="text-[17px] font-semibold text-text-primary">{currentCheckpoint?.name ?? 'Scanner'}</p>
-          <p className="text-[12px] text-text-secondary">Scan peserta yang melewati checkpoint ini</p>
+          <p className="text-[16px] font-semibold text-white drop-shadow">{currentCheckpoint?.name ?? 'Scanner'}</p>
+          <p className="text-[11px] text-white/60">Arahkan kamera ke QR code peserta</p>
         </div>
 
-        {/* Connection indicator */}
-        <div className="flex items-center gap-1.5">
-          {isOnline ? (
-            <Wifi size={16} className="text-success" aria-label="Online" />
-          ) : (
-            <WifiOff size={16} className="text-error" aria-label="Offline" />
-          )}
-          {pendingCount > 0 && (
-            <span className="text-[11px] font-medium text-warning" aria-label={`${pendingCount} scan pending`}>
-              {pendingCount}
-            </span>
-          )}
+        {/* Connection pill */}
+        <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full backdrop-blur-sm text-[11px] font-medium ${
+          isOnline ? 'bg-success/20 text-success' : 'bg-error/20 text-error'
+        }`}>
+          {isOnline
+            ? <><Wifi size={11} /> {pendingCount > 0 ? pendingCount : 'ON'}</>
+            : <><WifiOff size={11} /> {pendingCount > 0 ? pendingCount : 'OFF'}</>
+          }
         </div>
-      </header>
+      </div>
 
-      {/* Offline banner */}
-      {!isOnline && (
-        <div className="bg-error/10 border-b border-error/20 px-4 py-2 flex items-center justify-between">
-          <p className="text-[12px] text-error font-medium">
-            ● OFFLINE{pendingCount > 0 ? ` — ${pendingCount} scan pending` : ''}
-          </p>
-          <p className="text-[11px] text-text-secondary">Scan tersimpan lokal</p>
-        </div>
-      )}
+      {/* Bottom bar — floats over camera */}
+      <div className="relative z-10 mt-auto px-4 pb-safe-bottom pb-8 pt-6"
+        style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.65) 0%, transparent 100%)' }}>
 
-      {/* Scanner area */}
-      <div className="flex-1 flex flex-col items-center justify-center p-4 gap-6">
-        <QrScanner onScan={handleScan} paused={!!scanResult} />
-
-        {/* Last successful scan */}
-        {lastScan?.participant && (
-          <div className="glass rounded-2xl p-4 w-full max-w-sm animate-fade-in">
-            <p className="text-[12px] text-text-secondary mb-2">Scan terakhir</p>
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-success/15 flex items-center justify-center text-success font-bold text-[16px]">
-                ✓
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-[15px] font-semibold text-text-primary">{lastScan.participant.bib_number}</p>
-                <p className="text-[13px] text-text-secondary">{lastScan.participant.name}</p>
-              </div>
-              {lastScan.scanned_at && (
-                <p className="text-[13px] text-text-secondary">
-                  {new Date(lastScan.scanned_at).toLocaleTimeString('id-ID', { hour12: false })}
-                </p>
-              )}
+        {lastScan?.participant ? (
+          /* Last scan card */
+          <div className="flex items-center gap-3 bg-black/40 backdrop-blur-md rounded-2xl px-4 py-3 border border-white/10">
+            <div className="w-9 h-9 rounded-xl bg-success/20 flex items-center justify-center text-success text-[16px] font-bold shrink-0">✓</div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[14px] font-semibold text-white truncate">{lastScan.participant.bib_number} — {lastScan.participant.name}</p>
+              <p className="text-[11px] text-white/50">{lastScan.checkpoint?.name}</p>
             </div>
+            {lastScan.scanned_at && (
+              <p className="text-[12px] text-white/50 shrink-0">
+                {new Date(lastScan.scanned_at).toLocaleTimeString('id-ID', { hour12: false })}
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="text-center text-[13px] text-white/40">Belum ada scan</p>
+        )}
+
+        {/* Offline pending banner */}
+        {!isOnline && pendingCount > 0 && (
+          <div className="mt-2 flex items-center justify-center gap-1.5 text-[12px] text-warning">
+            <WifiOff size={12} />
+            <span>{pendingCount} scan pending — akan dikirim saat online</span>
           </div>
         )}
       </div>
 
+      {/* Scan result overlay */}
       <ScanFeedback result={scanResult} onDismiss={() => setScanResult(null)} />
     </div>
   );

@@ -100,3 +100,9 @@ body {
 .glass-hover:hover {
   background: rgba(255, 255, 255, 0.08);
 }
+
+@keyframes scanLine {
+  0%   { top: 10%; opacity: 0.4; }
+  50%  { opacity: 1; }
+  100% { top: 90%; opacity: 0.4; }
+}
